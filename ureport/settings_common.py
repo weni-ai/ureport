@@ -2097,3 +2097,5 @@ LOGGING = {
 SWAGGER_SETTINGS = {
     "SECURITY_DEFINITIONS": {"basic": {"type": "basic"}},
 }
+
+SQUASH_BATCH_SIZE = int(os.environ.get("SQUASH_BATCH_SIZE", 1000))

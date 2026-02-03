@@ -4,6 +4,7 @@ from abc import abstractmethod
 
 from django.db import connection, models
 from django.db.models import Sum
+from django.conf import settings
 
 
 class SquashableModel(models.Model):
@@ -12,6 +13,7 @@ class SquashableModel(models.Model):
     """
 
     squash_over = ()
+    squash_batch_size = None
 
     id = models.BigAutoField(auto_created=True, primary_key=True)
     is_squashed = models.BooleanField(default=False)
@@ -24,8 +26,10 @@ class SquashableModel(models.Model):
     def squash(cls):
         start = time.time()
         num_sets = 0
+        
+        batch_size = cls.squash_batch_size or settings.SQUASH_BATCH_SIZE
 
-        for distinct_set in cls.get_unsquashed().order_by(*cls.squash_over).distinct(*cls.squash_over)[:5000]:
+        for distinct_set in cls.get_unsquashed().order_by(*cls.squash_over).distinct(*cls.squash_over)[:batch_size]:
             with connection.cursor() as cursor:
                 sql, params = cls.get_squash_query(distinct_set)
 
