@@ -1,11 +1,11 @@
-FROM python:3.12-slim as build-poetry
+FROM python:3.12-slim AS build-poetry
 
 WORKDIR /app
 
 COPY ./pyproject.toml .
 COPY ./poetry.lock .
 
-RUN python -m pip install -U poetry==2.0.0
+RUN python -m pip install -U poetry==2.1.0
 RUN poetry self add poetry-plugin-export
 RUN poetry export --without-hashes --output requirements.txt
 
