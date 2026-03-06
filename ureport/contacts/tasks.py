@@ -19,6 +19,22 @@ from ureport.utils import chunk_list, datetime_to_json_date, update_cache_org_co
 
 logger = get_task_logger(__name__)
 
+PULL_CONTACTS_MAX_RETRIES = 3
+PULL_CONTACTS_RETRY_BACKOFF = 60  # seconds; doubles on each attempt (60s, 120s, 240s)
+
+
+def _call_with_retry(fn, *args, label="", max_retries=PULL_CONTACTS_MAX_RETRIES, backoff=PULL_CONTACTS_RETRY_BACKOFF):
+    for attempt in range(1, max_retries + 1):
+        try:
+            return fn(*args)
+        except Exception as exc:
+            if attempt == max_retries:
+                logger.error("%s failed after %d attempts: %s", label, max_retries, exc)
+                raise
+            wait = backoff * (2 ** (attempt - 1))
+            logger.warning("%s attempt %d/%d failed: %s — retrying in %ds", label, attempt, max_retries, exc, wait)
+            time.sleep(wait)
+
 
 @app.task(name="contacts.rebuild_contacts_counts")
 def rebuild_contacts_counts():
@@ -99,7 +115,9 @@ def pull_contacts(org, ignored_since, ignored_until):
 
         start = time.time()
 
-        backend_fields_results = backend.pull_fields(org)
+        backend_fields_results = _call_with_retry(
+            backend.pull_fields, org, label=f"pull_fields org #{org.pk} backend {backend_obj.slug}"
+        )
 
         fields_created = backend_fields_results[SyncOutcome.created]
         fields_updated = backend_fields_results[SyncOutcome.updated]
@@ -115,7 +133,9 @@ def pull_contacts(org, ignored_since, ignored_until):
 
         start_boundaries = time.time()
 
-        backend_boundaries_results = backend.pull_boundaries(org)
+        backend_boundaries_results = _call_with_retry(
+            backend.pull_boundaries, org, label=f"pull_boundaries org #{org.pk} backend {backend_obj.slug}"
+        )
 
         boundaries_created = backend_boundaries_results[SyncOutcome.created]
         boundaries_updated = backend_boundaries_results[SyncOutcome.updated]
@@ -131,7 +151,9 @@ def pull_contacts(org, ignored_since, ignored_until):
         logger.info("Fetch boundaries for org #%d took %ss" % (org.pk, time.time() - start_boundaries))
         start_contacts = time.time()
 
-        backend_contact_results, resume_cursor = backend.pull_contacts(org, since, until)
+        backend_contact_results, resume_cursor = _call_with_retry(
+            backend.pull_contacts, org, since, until, label=f"pull_contacts org #{org.pk} backend {backend_obj.slug}"
+        )
 
         contacts_created = backend_contact_results[SyncOutcome.created]
         contacts_updated = backend_contact_results[SyncOutcome.updated]
