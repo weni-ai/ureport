@@ -3,8 +3,9 @@ import time
 from collections import defaultdict
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.db.models import IntegerField, JSONField, Q, Sum
 from django.db.models.functions import Cast
 from django.utils import timezone, translation
@@ -89,124 +90,133 @@ class PollStats(models.Model):
     def squash(cls):
         start = time.time()
         num_sets = 0
-
-        stats_objs = (
-            cls.objects.exclude(is_squashed=True)
-            .exclude(date=None)
-            .order_by(
-                "org_id",
-                "question_id",
-                "flow_result_id",
-                "category_id",
-                "flow_result_category_id",
-                "age_segment_id",
-                "gender_segment_id",
-                "scheme_segment_id",
-                "location_id",
-                "date",
-            )
-            .distinct(
-                "org_id",
-                "question_id",
-                "flow_result_id",
-                "category_id",
-                "flow_result_category_id",
-                "age_segment_id",
-                "gender_segment_id",
-                "scheme_segment_id",
-                "location_id",
-                "date",
-            )[:30000]
-        )
-
-        for distinct_set in stats_objs:
+        # Use more memory per connection during this task to avoid temp file spills on large DISTINCT/ORDER BY
+        with transaction.atomic():
             with connection.cursor() as cursor:
-                where_sql = ""
-                if distinct_set.org_id is not None:
-                    where_sql += '"org_id" = %s AND ' % distinct_set.org_id
-                else:
-                    where_sql += '"org_id" IS NULL AND'
+                try:
+                    cursor.execute("SET LOCAL work_mem = %s", ["512MB"])
+                except Exception:
+                    # If the DB disallows changing work_mem, proceed without failing the task
+                    pass
 
-                if distinct_set.question_id is not None:
-                    where_sql += '"question_id" = %s AND' % distinct_set.question_id
-                else:
-                    where_sql += '"question_id" IS NULL AND'
-
-                if distinct_set.flow_result_id is not None:
-                    where_sql += '"flow_result_id" = %s AND' % distinct_set.flow_result_id
-                else:
-                    where_sql += '"flow_result_id" IS NULL AND'
-
-                if distinct_set.category_id is not None:
-                    where_sql += '"category_id" = %s AND' % distinct_set.category_id
-                else:
-                    where_sql += '"category_id" IS NULL AND'
-
-                if distinct_set.flow_result_category_id is not None:
-                    where_sql += '"flow_result_category_id" = %s AND' % distinct_set.flow_result_category_id
-                else:
-                    where_sql += '"flow_result_category_id" IS NULL AND'
-
-                if distinct_set.age_segment_id is not None:
-                    where_sql += '"age_segment_id" = %s AND' % distinct_set.age_segment_id
-                else:
-                    where_sql += '"age_segment_id" IS NULL AND'
-
-                if distinct_set.gender_segment_id is not None:
-                    where_sql += '"gender_segment_id" = %s AND' % distinct_set.gender_segment_id
-                else:
-                    where_sql += '"gender_segment_id" IS NULL AND'
-
-                if distinct_set.scheme_segment_id is not None:
-                    where_sql += '"scheme_segment_id" = %s AND' % distinct_set.scheme_segment_id
-                else:
-                    where_sql += '"scheme_segment_id" IS NULL AND'
-
-                if distinct_set.location_id is not None:
-                    where_sql += '"location_id" = %s AND' % distinct_set.location_id
-                else:
-                    where_sql += '"location_id" IS NULL AND'
-
-                where_sql += """
-                "date" = date_trunc('day', TIMESTAMP '%s')::TIMESTAMP
-                """ % str(
-                    distinct_set.date
+        with transaction.atomic():
+            stats_objs = (
+                cls.objects.exclude(is_squashed=True)
+                .exclude(date=None)
+                .order_by(
+                    "org_id",
+                    "question_id",
+                    "flow_result_id",
+                    "category_id",
+                    "flow_result_category_id",
+                    "age_segment_id",
+                    "gender_segment_id",
+                    "scheme_segment_id",
+                    "location_id",
+                    "date",
                 )
+                .distinct(
+                    "org_id",
+                    "question_id",
+                    "flow_result_id",
+                    "category_id",
+                    "flow_result_category_id",
+                    "age_segment_id",
+                    "gender_segment_id",
+                    "scheme_segment_id",
+                    "location_id",
+                    "date",
+                )[:30000]
+            )
 
-                sql = """
-                WITH deleted as (
-                  DELETE FROM stats_pollstats WHERE "id" IN (
-                    SELECT "id" FROM stats_pollstats
-                      WHERE %(where_sql)s
-                      LIMIT 10000
-                  ) RETURNING "count"
-                )
-                INSERT INTO stats_pollstats("org_id", "question_id", "flow_result_id", "category_id", "flow_result_category_id", "age_segment_id", "gender_segment_id", "scheme_segment_id", "location_id", "date", "count", "is_squashed")
-                VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, date_trunc('day', TIMESTAMP %%s)::TIMESTAMP, GREATEST(0, (SELECT SUM("count") FROM deleted)), TRUE);
-                """ % {
-                    "where_sql": where_sql
-                }
+            for distinct_set in stats_objs:
+                with connection.cursor() as cursor:
+                    where_sql = ""
+                    if distinct_set.org_id is not None:
+                        where_sql += '"org_id" = %s AND ' % distinct_set.org_id
+                    else:
+                        where_sql += '"org_id" IS NULL AND'
 
-                params = (
-                    distinct_set.org_id,
-                    distinct_set.question_id,
-                    distinct_set.flow_result_id,
-                    distinct_set.category_id,
-                    distinct_set.flow_result_category_id,
-                    distinct_set.age_segment_id,
-                    distinct_set.gender_segment_id,
-                    distinct_set.scheme_segment_id,
-                    distinct_set.location_id,
-                    str(distinct_set.date),
-                )
+                    if distinct_set.question_id is not None:
+                        where_sql += '"question_id" = %s AND' % distinct_set.question_id
+                    else:
+                        where_sql += '"question_id" IS NULL AND'
 
-                cursor.execute(sql, params)
+                    if distinct_set.flow_result_id is not None:
+                        where_sql += '"flow_result_id" = %s AND' % distinct_set.flow_result_id
+                    else:
+                        where_sql += '"flow_result_id" IS NULL AND'
 
-            num_sets += 1
+                    if distinct_set.category_id is not None:
+                        where_sql += '"category_id" = %s AND' % distinct_set.category_id
+                    else:
+                        where_sql += '"category_id" IS NULL AND'
 
-        time_taken = time.time() - start
+                    if distinct_set.flow_result_category_id is not None:
+                        where_sql += '"flow_result_category_id" = %s AND' % distinct_set.flow_result_category_id
+                    else:
+                        where_sql += '"flow_result_category_id" IS NULL AND'
 
-        logger.info("Squashed %d distinct sets of %s in %0.3fs" % (num_sets, cls.__name__, time_taken))
+                    if distinct_set.age_segment_id is not None:
+                        where_sql += '"age_segment_id" = %s AND' % distinct_set.age_segment_id
+                    else:
+                        where_sql += '"age_segment_id" IS NULL AND'
+
+                    if distinct_set.gender_segment_id is not None:
+                        where_sql += '"gender_segment_id" = %s AND' % distinct_set.gender_segment_id
+                    else:
+                        where_sql += '"gender_segment_id" IS NULL AND'
+
+                    if distinct_set.scheme_segment_id is not None:
+                        where_sql += '"scheme_segment_id" = %s AND' % distinct_set.scheme_segment_id
+                    else:
+                        where_sql += '"scheme_segment_id" IS NULL AND'
+
+                    if distinct_set.location_id is not None:
+                        where_sql += '"location_id" = %s AND' % distinct_set.location_id
+                    else:
+                        where_sql += '"location_id" IS NULL AND'
+
+                    where_sql += """
+                    "date" = date_trunc('day', TIMESTAMP '%s')::TIMESTAMP
+                    """ % str(
+                        distinct_set.date
+                    )
+
+                    sql = """
+                    WITH deleted as (
+                      DELETE FROM stats_pollstats WHERE "id" IN (
+                        SELECT "id" FROM stats_pollstats
+                          WHERE %(where_sql)s
+                          LIMIT 10000
+                      ) RETURNING "count"
+                    )
+                    INSERT INTO stats_pollstats("org_id", "question_id", "flow_result_id", "category_id", "flow_result_category_id", "age_segment_id", "gender_segment_id", "scheme_segment_id", "location_id", "date", "count", "is_squashed")
+                    VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, date_trunc('day', TIMESTAMP %%s)::TIMESTAMP, GREATEST(0, (SELECT SUM("count") FROM deleted)), TRUE);
+                    """ % {
+                        "where_sql": where_sql
+                    }
+
+                    params = (
+                        distinct_set.org_id,
+                        distinct_set.question_id,
+                        distinct_set.flow_result_id,
+                        distinct_set.category_id,
+                        distinct_set.flow_result_category_id,
+                        distinct_set.age_segment_id,
+                        distinct_set.gender_segment_id,
+                        distinct_set.scheme_segment_id,
+                        distinct_set.location_id,
+                        str(distinct_set.date),
+                    )
+
+                    cursor.execute(sql, params)
+
+                num_sets += 1
+
+            time_taken = time.time() - start
+
+            logger.info("Squashed %d distinct sets of %s in %0.3fs" % (num_sets, cls.__name__, time_taken))
 
     @classmethod
     def get_question_stats(cls, org_id, question):
@@ -1024,9 +1034,59 @@ class ContactActivityCounter(SquashableModel):
 
         return sql, (distinct_set.org_id, distinct_set.date, distinct_set.type, distinct_set.value) * 2
 
+    @classmethod
+    def squash(cls):
+        # Collapse unsquashed delta rows into a single squashed row per
+        # (org_id, date, type, value). Work is done in bounded batches, each in its
+        # own transaction, with a per-statement timeout so a single run can never
+        # become a multi-hour "runaway" query that piles up across beat ticks.
+        start = time.time()
+        num_sets = 0
+
+        batch_size = cls.squash_batch_size or settings.SQUASH_BATCH_SIZE
+        max_runtime = getattr(settings, "CONTACT_ACTIVITY_SQUASH_MAX_RUNTIME", 60 * 30)
+        statement_timeout = getattr(settings, "CONTACT_ACTIVITY_SQUASH_STATEMENT_TIMEOUT", "5min")
+
+        while time.time() - start <= max_runtime:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    # Safeguard: cap every statement issued on this connection so the
+                    # DISTINCT ON scan and the per-set squash can never run for hours.
+                    cursor.execute("SET LOCAL statement_timeout = %s", [str(statement_timeout)])
+                    try:
+                        cursor.execute("SET LOCAL work_mem = %s", ["256MB"])
+                    except Exception:
+                        # If the DB disallows changing work_mem, proceed without failing
+                        pass
+
+                distinct_sets = list(
+                    cls.get_unsquashed().order_by(*cls.squash_over).distinct(*cls.squash_over)[:batch_size]
+                )
+
+                if not distinct_sets:
+                    break
+
+                for distinct_set in distinct_sets:
+                    with connection.cursor() as cursor:
+                        sql, params = cls.get_squash_query(distinct_set)
+                        cursor.execute(sql, params)
+
+                num_sets += len(distinct_sets)
+
+        time_taken = time.time() - start
+        logger.info("Squashed %d distinct sets of %s in %0.3fs" % (num_sets, cls.__name__, time_taken))
+
     class Meta:
         indexes = [
             models.Index(name="contact_activitycntr_org_count", fields=["org", "date", "type", "value", "count"]),
+            # Partial index over only the unsquashed delta rows. This is what makes the
+            # squash DISTINCT ON (org_id, date, type, value) WHERE NOT is_squashed fast,
+            # instead of scanning the whole (mostly-squashed) table.
+            models.Index(
+                name="contact_activitycntr_unsquash",
+                fields=["org", "date", "type", "value"],
+                condition=Q(is_squashed=False),
+            ),
         ]
 
 

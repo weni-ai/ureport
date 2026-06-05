@@ -1,3 +1,7 @@
+v1.2.170 (2026-06-05)
+-------------------------
+ * Avoid problem to run contact activity task
+
 v1.2.169 (2025-10-31)
 -------------------------
  * Reduce squash items query rows
