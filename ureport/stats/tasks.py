@@ -80,13 +80,25 @@ def squash_contact_activities_counts():
     r = get_valkey_connection()
     key = "squash_contact_activity_counts_lock"
 
-    lock_timeout = 60 * 60
+    # The lock must outlive a single run so overlapping beat ticks skip instead of
+    # piling up. This is only a safety auto-release in case the worker dies; the
+    # squash itself is bounded by CONTACT_ACTIVITY_SQUASH_MAX_RUNTIME and a
+    # per-statement timeout, so it finishes well within this window.
+    lock_timeout = 60 * 60 * 6
 
-    if r.get(key):
+    lock = r.lock(key, timeout=lock_timeout)
+    if not lock.acquire(blocking=False):
         logger.info("Skipping squashing contact activity counts as it is still running")
-    else:
-        with r.lock(key, timeout=lock_timeout):
-            ContactActivityCounter.squash()
+        return
+
+    try:
+        ContactActivityCounter.squash()
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            # Lock may have already auto-expired if the run exceeded lock_timeout
+            pass
 
 
 @app.task(name="stats.rebuild_contacts_activities_counts")
