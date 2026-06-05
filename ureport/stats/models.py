@@ -1083,7 +1083,7 @@ class ContactActivityCounter(SquashableModel):
             # squash DISTINCT ON (org_id, date, type, value) WHERE NOT is_squashed fast,
             # instead of scanning the whole (mostly-squashed) table.
             models.Index(
-                name="contact_activitycntr_unsquashed",
+                name="contact_activitycntr_unsquash",
                 fields=["org", "date", "type", "value"],
                 condition=Q(is_squashed=False),
             ),

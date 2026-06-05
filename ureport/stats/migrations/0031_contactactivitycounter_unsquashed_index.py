@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
         AddIndexConcurrently(
             "contactactivitycounter",
             models.Index(
-                name="contact_activitycntr_unsquashed",
+                name="contact_activitycntr_unsquash",
                 fields=["org", "date", "type", "value"],
                 condition=Q(is_squashed=False),
             ),
