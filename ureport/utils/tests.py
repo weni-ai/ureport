@@ -8,6 +8,7 @@ from datetime import datetime, timezone as tzone
 import mock
 import valkey
 from mock import patch
+from temba_client.exceptions import TembaTokenError
 from temba_client.v2 import Flow
 
 from django.conf import settings
@@ -143,6 +144,16 @@ class UtilsTest(UreportTest):
                 dict(time=500, results=expected),
                 UREPORT_ASYNC_FETCHED_DATA_CACHE_TIME,
             )
+
+    @patch("ureport.utils.capture_exception")
+    @patch("dash.orgs.models.TembaClient.get_flows")
+    def test_fetch_flows_invalid_token(self, mock_get_flows, mock_capture_exception):
+        mock_get_flows.side_effect = TembaTokenError()
+
+        flows = fetch_flows(self.org, self.rapidpro_backend)
+
+        self.assertEqual(flows, {})
+        mock_capture_exception.assert_not_called()
 
     def test_update_poll_flow_data(self):
         poll = Poll.objects.filter(pk=self.poll.pk).first()

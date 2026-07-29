@@ -11,7 +11,7 @@ from datetime import timedelta, timezone as tzone
 
 import requests
 from django_valkey import get_valkey_connection
-from temba_client.exceptions import TembaRateExceededError
+from temba_client.exceptions import TembaRateExceededError, TembaTokenError
 from temba_client.v2.types import Run
 
 from django.core.cache import cache
@@ -702,6 +702,22 @@ class RapidProBackend(BaseBackend):
                                 stats_dict["num_path_updated"],
                                 stats_dict["num_path_ignored"],
                             )
+                except TembaTokenError:
+                    logger.warning(
+                        "Skipping pull results for poll #%d on org #%d (%s): invalid RapidPro API token",
+                        poll.pk,
+                        org.pk,
+                        org.name,
+                    )
+
+                    return (
+                        stats_dict["num_val_created"],
+                        stats_dict["num_val_updated"],
+                        stats_dict["num_val_ignored"],
+                        stats_dict["num_path_created"],
+                        stats_dict["num_path_updated"],
+                        stats_dict["num_path_ignored"],
+                    )
                 except TembaRateExceededError:
                     # rebuild the aggregated counts
                     poll.rebuild_poll_results_counts()
