@@ -12,6 +12,7 @@ from itertools import chain, islice
 import iso8601
 import six
 from sentry_sdk import capture_exception
+from temba_client.exceptions import TembaTokenError
 
 from django.conf import settings
 from django.core.cache import cache
@@ -171,6 +172,12 @@ def fetch_flows(org, backend=None):
             cache_key = CACHE_ORG_FLOWS_KEY % (org.pk, backend_obj.slug)
             cache.set(cache_key, org_flows, UREPORT_ASYNC_FETCHED_DATA_CACHE_TIME)
 
+        except TembaTokenError:
+            logger.warning(
+                "Skipping flow fetch for org #%d (%s): invalid RapidPro API token",
+                org.pk,
+                org.name,
+            )
         except Exception as e:
             capture_exception(e)
             import traceback

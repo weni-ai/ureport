@@ -8,7 +8,7 @@ import logging
 from datetime import timedelta
 
 from mock import PropertyMock, patch
-from temba_client.exceptions import TembaRateExceededError
+from temba_client.exceptions import TembaRateExceededError, TembaTokenError
 from temba_client.v2.types import (
     Archive as TembaArchive,
     Boundary as TembaBoundary,
@@ -3006,3 +3006,43 @@ class PerfTest(UreportTest):
 
         self.assertEqual(set(expected_args), set(self.get_mock_args_list(mock_cache_set)))
         mock_pull_refresh.assert_called_once_with((poll.pk,), countdown=300, queue="sync")
+
+    @override_settings(DEBUG=True)
+    @patch("dash.orgs.models.TembaClient._request")
+    @patch("ureport.polls.tasks.pull_refresh.apply_async")
+    @patch("django.core.cache.cache.set")
+    @patch("django.utils.timezone.now")
+    @patch("ureport.polls.models.Poll.get_pull_cached_params")
+    def test_pull_results_invalid_token(
+        self,
+        mock_get_pull_cached_params,
+        mock_timezone_now,
+        mock_cache_set,
+        mock_pull_refresh,
+        mock_base_client_request,
+    ):
+        now_date = json_date_to_datetime("2015-04-08T12:48:44.320Z")
+        mock_timezone_now.return_value = now_date
+
+        PollResult.objects.all().delete()
+
+        poll = self.create_poll(self.nigeria, "Flow 1", "flow-uuid", self.education_nigeria, self.admin)
+
+        mock_get_pull_cached_params.side_effect = [(None, None)]
+        mock_base_client_request.side_effect = [TembaTokenError()]
+
+        (
+            num_val_created,
+            num_val_updated,
+            num_val_ignored,
+            num_path_created,
+            num_path_updated,
+            num_path_ignored,
+        ) = self.backend.pull_results(poll, None, None)
+
+        self.assertEqual(
+            (num_val_created, num_val_updated, num_val_ignored, num_path_created, num_path_updated, num_path_ignored),
+            (0, 0, 0, 0, 0, 0),
+        )
+        mock_cache_set.assert_not_called()
+        mock_pull_refresh.assert_not_called()
