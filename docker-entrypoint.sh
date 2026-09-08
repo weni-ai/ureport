@@ -86,6 +86,10 @@ do_gosu() {
 }
 
 bootstrap_conf(){
+	# chown requires root; skip when the container already runs as APP_UID
+	if [ "$(id -u)" != "0" ]; then
+		return 0
+	fi
 	find "${PROJECT_PATH}" -not -user "${APP_UID}" -exec chown "${APP_UID}:${APP_GID}" {} \+
 }
 
